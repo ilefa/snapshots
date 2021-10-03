@@ -3,14 +3,9 @@ import RmpIds from '@ilefa/husky/rmpIds.json';
 import Classrooms from '@ilefa/husky/classrooms.json';
 import CourseMappings from '@ilefa/husky/courses.json';
 
-import { Listr } from 'listr2';
-import { TaskWrapper } from 'listr2/dist/lib/task-wrapper';
-import { DefaultRenderer } from 'listr2/dist/renderer/default.renderer';
-
 import {
     Classroom,
     CourseAttributes,
-    getRawEnrollment,
     getRmpReport,
     ProfessorData,
     RateMyProfessorReport,
@@ -23,8 +18,6 @@ interface SnapshotTask {
     professors: CompleteProfessorPayload[];
     classrooms: Classroom[];
 }
-
-export type Task = TaskWrapper<SnapshotTask, typeof DefaultRenderer>;
 
 export type ProfessorPayload = {
     rmpIds: string[];
@@ -72,51 +65,61 @@ export const snapshot = async () => {
     const start = Date.now();
     const name = getSnapshotName();
     const path = `./snapshots/${name}.json`;
+
+    let ctx: SnapshotTask = {} as any;
     console.log(`[*] Preparing to capture snapshot for ${name}`);
 
-    const tasks = new Listr<SnapshotTask>([
-        {
-            title: 'Courses',
-            exitOnError: true,
-            task: async (ctx, task): Promise<void> => {
-                let courseNames = CourseMappings.map(course => course.name.includes(' ') ? course.name.replace(/\s/g, '') : course.name);
-                let courses = await Promise.all(courseNames.map(async (name, i, arr) => await getPatchedCourse(name, task, i, arr.length)))
-                ctx.courses = courses;
-            },
-        },
-        {
-            title: 'Professors',
-            exitOnError: false,
-            task: async (ctx, task): Promise<void> => {
-                let professors = await Promise.all(RmpIds.map(async (ent, i, arr) => await getPatchedProfessor(ent, ctx, task, i, arr.length)))
-                ctx.professors = professors;
-            }
-        },
-        {
-            title: 'Classrooms',
-            exitOnError: false,
-            task: async (ctx, _task): Promise<void> => {
-                ctx.classrooms = Classrooms as any;
-            }
-        },
-        {
-            title: 'Process Data',
-            task: async (ctx, _task): Promise<void> => {
-                ctx.courses = ctx.courses.sort((a, b) => a.name.localeCompare(b.name));
-                ctx.professors = ctx.professors.sort((a, b) => a.name.localeCompare(b.name));
-                ctx.classrooms = ctx.classrooms.sort((a, b) => a.name.localeCompare(b.name));
-            }
-        },
-        {
-            title: 'Writing snapshot to disk',
-            task: async (ctx) => {
-                fs.writeFileSync(path, JSON.stringify(ctx, null, 3));
-                console.log(`[*] Snapshot for ${name} captured in ${getLatestTimeValue(Date.now() - start)}`)
-            }
-        }
-    ]);
+    let courseNames = CourseMappings
+        .map(course => course.name.includes(' ')
+            ? course.name.replace(/\s/g, '')
+            : course.name)
+        .sort((a, b) => a.localeCompare(b));
 
-    await tasks.run();
+    console.log(`[*] Capturing ${courseNames.length} courses..`);
+    let courses = [];
+    let courseI = 0;
+
+    for (let name of courseNames) {
+        courseI++;
+
+        let start = Date.now();
+        let course = await getPatchedCourse(name);
+        if (course.name.includes('(Missing)')) console.log(`!!!!!! Missing data for ${name} !!!!!!`);
+        else console.log(`--> [${courseI}/${courseNames.length}] ${name} took ${(Date.now() - start).toFixed(2)}ms`);
+
+        courses.push(course);
+    }
+
+    ctx.courses = courses;
+    fs.writeFileSync(`./snapshots/${name}-courses.json`, JSON.stringify(courses, null, 3));
+    
+    console.log(`[*] Capturing ${RmpIds.length} professor IDs..`);
+    let professors = [];
+    let professorsI = 0;
+    for (let id of RmpIds) {
+        professorsI++;
+
+        let start = Date.now();
+        let prof = await getPatchedProfessor(id, ctx);
+        console.log(`--> [${professorsI}/${RmpIds.length}] ${prof.name} took ${(Date.now() - start).toFixed(2)}ms`);
+        
+        professors.push(prof);
+    }
+
+    ctx.professors = professors;
+    fs.writeFileSync(`./snapshots/${name}-profs.json`, JSON.stringify(professors, null, 3));
+    
+    console.log(`[*] Capturing classrooms..`);
+    ctx.classrooms = Classrooms as any;
+    fs.writeFileSync(`./snapshots/${name}-classrooms.json`, JSON.stringify(ctx.classrooms, null, 3));
+    
+    console.log(`[*] Processing data..`);
+    ctx.courses = ctx.courses.sort((a, b) => a.name.localeCompare(b.name));
+    ctx.professors = ctx.professors.sort((a, b) => a.name.localeCompare(b.name));
+    ctx.classrooms = ctx.classrooms.sort((a, b) => a.name.localeCompare(b.name));
+
+    fs.writeFileSync(path, JSON.stringify(ctx, null, 3));
+    console.log(`[*] Snapshot for ${name} captured in ${getLatestTimeValue(Date.now() - start)}`)
 }
 
 /**
@@ -127,28 +130,60 @@ export const snapshot = async () => {
  * @param i the index of the course
  * @param all the total number of courses
  */
-export const getPatchedCourse = async (name: string, task: Task, i: number, all: number): Promise<CompleteCoursePayload> => {
+export const getPatchedCourse = async (name: string): Promise<CompleteCoursePayload> => {
     let course = await searchCourse(name);
-    if (!course) throw new Error(`Error retrieving data for ${name}!`);
+    if (!course) return {
+        name: `${name} (Missing)`,
+        catalogName: null,
+        catalogNumber: null,
+        attributes: {
+            writing: null,
+            lab: null,
+            contentAreas: null,
+            environmental: null,
+            quantitative: null
+        },
+        grading: null,
+        credits: null,
+        prerequisites: null,
+        description: null,
+        sections: [],
+        professors: [],
+    };
 
     let mappings = CourseMappings.find(mapping => mapping.name === name);
-    if (!mappings) throw new Error(`No mappings for ${name}!`);
+    if (!mappings) return {
+        name: `${name} (Missing)`,
+        catalogName: null,
+        catalogNumber: null,
+        attributes: {
+            writing: null,
+            lab: null,
+            contentAreas: null,
+            environmental: null,
+            quantitative: null
+        },
+        grading: course.grading,
+        credits: parseInt(course.credits),
+        prerequisites: course.prereqs,
+        description: course.description,
+        sections: course.sections,
+        professors: course.professors,
+    };
 
-    task.output = `${name}`
+    // let patchedSections = await Promise.all(course.sections.map(async section => {
+    //     let enrollment = await getRawEnrollment(section.internal.termCode, section.internal.classNumber, section.internal.classSection);
 
-    let patchedSections = await Promise.all(course.sections.map(async section => {
-        let enrollment = await getRawEnrollment(section.internal.termCode, section.internal.classNumber, section.internal.classSection);
-
-        return {
-            ...section,
-            enrollment: {
-                max: enrollment.total,
-                current: enrollment.available,
-                waitlist: section.enrollment.waitlist,
-                full: enrollment.overfill,
-            }
-        }
-    }));
+    //     return {
+    //         ...section,
+    //         enrollment: {
+    //             max: enrollment.total,
+    //             current: enrollment.available,
+    //             waitlist: section.enrollment.waitlist,
+    //             full: enrollment.overfill,
+    //         }
+    //     }
+    // }));
 
     return {
         name: mappings.name,
@@ -159,7 +194,7 @@ export const getPatchedCourse = async (name: string, task: Task, i: number, all:
         credits: parseInt(course.credits),
         prerequisites: course.prereqs,
         description: course.description,
-        sections: patchedSections,
+        sections: course.sections,
         professors: course.professors
     }
 }
@@ -173,7 +208,7 @@ export const getPatchedCourse = async (name: string, task: Task, i: number, all:
  * @param i the index of this professor
  * @param all the total amount of professors
  */
-export const getPatchedProfessor = async (payload: ProfessorPayload, ctx: SnapshotTask, task: Task, i: number, all: number) => {
+export const getPatchedProfessor = async (payload: ProfessorPayload, ctx: SnapshotTask) => {
     let ratings: ProfessorRatings[] = await Promise.all(payload.rmpIds.map(async rmpId => {
         let report = await getRmpReport(rmpId);
         return {
@@ -182,7 +217,6 @@ export const getPatchedProfessor = async (payload: ProfessorPayload, ctx: Snapsh
         }
     }));
 
-    task.output = `(${i}/${all}) ${payload.name}`;
     let courses = ctx
         .courses
         .filter(course => course
