@@ -1,6 +1,5 @@
 test/
 node_modules/
-snapshots/*-*.json
 .vscode/
 
 *.test.ts
