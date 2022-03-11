@@ -56,20 +56,20 @@ export type CompleteCoursePayload = {
 export const getSnapshotName = (date = new Date()) => {
     const year = date.getFullYear();
     const month = date.getMonth();
-    if (month >= 0 && month <= 4)
-        return 'spring' + (year - 1);
+    if (month >= 0 && month <= 5)
+        return 'spring' + year;
     return 'fall' + year;
 }
 
 export const snapshot = async () => {
     const start = Date.now();
     const name = getSnapshotName();
-    const path = `./snapshots/${name}.json`;
+    const path = `./records/${name}.json`;
 
     let ctx: SnapshotTask = {} as any;
     console.log(`[*] Preparing to capture snapshot for ${name}`);
 
-    let courseNames = CourseMappings
+    let courseNames = (CourseMappings as any)
         .map(course => course.name.includes(' ')
             ? course.name.replace(/\s/g, '')
             : course.name)
@@ -91,7 +91,7 @@ export const snapshot = async () => {
     }
 
     ctx.courses = courses;
-    fs.writeFileSync(`./snapshots/${name}-courses.json`, JSON.stringify(courses, null, 3));
+    fs.writeFileSync(`./records/${name}-courses.json`, JSON.stringify(courses, null, 3));
     
     console.log(`[*] Capturing ${RmpIds.length} professor IDs..`);
     let professors = [];
@@ -107,11 +107,11 @@ export const snapshot = async () => {
     }
 
     ctx.professors = professors;
-    fs.writeFileSync(`./snapshots/${name}-profs.json`, JSON.stringify(professors, null, 3));
+    fs.writeFileSync(`./records/${name}-profs.json`, JSON.stringify(professors, null, 3));
     
     console.log(`[*] Capturing classrooms..`);
     ctx.classrooms = Classrooms as any;
-    fs.writeFileSync(`./snapshots/${name}-classrooms.json`, JSON.stringify(ctx.classrooms, null, 3));
+    fs.writeFileSync(`./records/${name}-classrooms.json`, JSON.stringify(ctx.classrooms, null, 3));
     
     console.log(`[*] Processing data..`);
     ctx.courses = ctx.courses.sort((a, b) => a.name.localeCompare(b.name));
@@ -151,7 +151,7 @@ export const getPatchedCourse = async (name: string): Promise<CompleteCoursePayl
         professors: [],
     };
 
-    let mappings = CourseMappings.find(mapping => mapping.name === name);
+    let mappings = (CourseMappings as any).find(mapping => mapping.name === name);
     if (!mappings) return {
         name: `${name} (Missing)`,
         catalogName: null,

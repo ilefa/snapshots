@@ -1,5 +1,8 @@
 test/
+dist/
 node_modules/
 .vscode/
 
+.DS_Store
+._.*
 *.test.ts
